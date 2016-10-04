@@ -35,7 +35,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	var webhook Webhook
 
 	// Output message
-	fmt.Printf("\033[38;5;45mNew Request Received:\033[0m\n")
+	fmt.Printf("\n\033[38;5;45mNew Request Received:\033[0m\n")
 
 	// generate the request dump
 	requestDump, err := httputil.DumpRequest(r, true)
