@@ -48,13 +48,19 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		decoder := json.NewDecoder(r.Body)
 		err := decoder.Decode(&webhook)
 		if err != nil {
-			fmt.Printf("> Error: %s", err)
+			fmt.Printf("\033[38;5;196mError:\033[0m %s", err)
+			w.Write(requestDump)
+			return
 		}
 
 		// Supply format string to formater
 		fm, _ := NewFormater(format)
 		// Parse webhook
-		fm.Parse(&webhook)
+		if err = fm.Parse(&webhook); err != nil {
+			fmt.Printf("\033[38;5;196mError:\033[0m %s", err)
+			w.Write(requestDump)
+			return
+		}
 	} else {
 		// Output locally
 		fmt.Printf(string(requestDump))

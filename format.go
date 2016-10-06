@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"html/template"
 	"os"
 	"strings"
@@ -17,18 +16,20 @@ func NewFormater(format string) (*Formater, error) {
 	return fmtr, nil
 }
 
-func (fmtr *Formater) Parse(wh *Webhook) {
+func (fmtr *Formater) Parse(wh *Webhook) error {
 	fm := template.FuncMap{
 		"join":           strings.Join,
 		"formatDatetime": formatDatetime,
 	}
 	tmpl, err := template.New("main").Funcs(fm).Parse(fmtr.Format)
 	if err != nil {
-		panic(fmt.Sprintf("%s", err))
+		return err
 	}
 	if err := tmpl.Execute(os.Stdout, wh); err != nil {
-		panic(fmt.Sprintf("%s", err))
+		return err
 	}
+
+	return nil
 }
 
 func formatDatetime(date string) string {
