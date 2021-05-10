@@ -62,7 +62,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Compare the two tokens
-		if !hmac.Equal([]byte(r.Header.Get("Authorization")), []byte(flagAuthtoken)) {
+		if !hmac.Equal([]byte(r.Header.Get("Authorization")), []byte("Bearer "+flagAuthtoken)) {
 			w.Header().Set("X-Whdbg-Err", "Incorrect authorization header")
 			w.WriteHeader(flagStatusCode)
 			w.Write([]byte("{\"status\":\"error\"}"))
