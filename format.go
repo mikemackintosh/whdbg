@@ -6,16 +6,19 @@ import (
 	"strings"
 )
 
+// Formater is a format required string
 type Formater struct {
 	Format string
 	Vars   interface{}
 }
 
+// NewFormater will create a new format object using the provided string
 func NewFormater(format string) (*Formater, error) {
 	fmtr := &Formater{Format: format}
 	return fmtr, nil
 }
 
+// Parse will parse the format string using the provided Webhook
 func (fmtr *Formater) Parse(wh *Webhook) error {
 	fm := template.FuncMap{
 		"join":           strings.Join,
