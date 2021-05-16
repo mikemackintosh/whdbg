@@ -78,10 +78,10 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	switch r.Header.Get("Content-type") {
 	case "application/json":
 		decodeJSON(w, r.Body)
-	case "text/plain":
-	case "text/csv":
-	case "application/xml":
-	case "text/xml":
+		//	case "text/plain":
+		//	case "text/csv":
+		//	case "application/xml":
+		//	case "text/xml":
 	default:
 		// generate the request dump
 		requestDump, err := httputil.DumpRequest(r, true)
