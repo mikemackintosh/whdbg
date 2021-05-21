@@ -11,20 +11,25 @@ import (
 	"strings"
 )
 
-// flagListPort is supplied to ListenAndServe.
-var flagListPort string
+var (
+	// flagListPort is supplied to ListenAndServe.
+	flagListPort string
 
-// flagAuthtoken is used to perform authentication against whdbg.
-var flagAuthtoken string
+	// flagAuthtoken is used to perform authentication against whdbg.
+	flagAuthtoken string
 
-// flagFormat if supplied prints data in this format.
-var flagFormat string
+	// flagFormat if supplied prints data in this format.
+	flagFormat string
 
-// flagResponseBody if supplied sets the response data for the request.
-var flagResponseBody string
+	// flagResponseBody if supplied sets the response data for the request.
+	flagResponseBody string
 
-// flagStatusCode is used to set the response status code.
-var flagStatusCode int
+	// flagStatusCode is used to set the response status code.
+	flagStatusCode int
+
+	// Create the hub
+	hub = newHub()
+)
 
 // Webhook is the json interprestaiton.
 type Webhook map[string]interface{}
@@ -53,6 +58,24 @@ func init() {
 
 // handler will write the request dump to the response and stdout
 func handler(w http.ResponseWriter, r *http.Request) {
+	if strings.Contains(r.Header.Get("Accept"), "text/html") && len(r.Header.Get("Sec-ch-ua")) > 0 {
+		if r.URL.Path == "/" {
+
+			home.Execute(w, map[string]interface{}{
+				"subs": hub.subs,
+			})
+			return
+		}
+
+		if strings.Contains(r.URL.Path, "/_/") {
+			sub := r.URL.Path[len("/_/"):]
+			if len(sub) > 0 {
+				sock.Execute(w, map[string]string{"sub": sub, "ws": "ws://" + r.Host + "/ws/" + sub})
+				return
+			}
+		}
+	}
+
 	if len(flagAuthtoken) > 0 {
 		if _, ok := r.Header["Authorization"]; !ok {
 			w.Header().Set("X-Whdbg-Err", "Missing authorization header")
@@ -73,8 +96,25 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	// Output message
 	fmt.Printf("\n\033[38;5;45mNew Request Received:\033[0m\n")
 
-	// Check the content type header
+	// Gen the request output
 	var requestDump []byte
+	requestDump, err := httputil.DumpRequest(r, true)
+	if err != nil {
+		requestDump = []byte(err.Error())
+	}
+
+	listener := strings.Replace(r.Host, ".whdbg.dev", "", -1)
+	if ws, ok := hub.subs[listener]; ok {
+		ws.hub.broadcast <- requestDump
+	} else {
+		w.Write([]byte("Please create the listener first by visiting https://whdbg.dev/_/" + listener + "\n"))
+		return
+	}
+
+	// listener := strings.Replace(r.Host, ".whdbg.dev", "", -1)
+	// push(w, r, listener, requestDump)
+
+	// Check the content type header
 	switch r.Header.Get("Content-type") {
 	case "application/json":
 		decodeJSON(w, r.Body)
@@ -84,10 +124,6 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		//	case "text/xml":
 	default:
 		// generate the request dump
-		requestDump, err := httputil.DumpRequest(r, true)
-		if err != nil {
-			requestDump = []byte(err.Error())
-		}
 		fmt.Printf(string(requestDump))
 	}
 
@@ -138,8 +174,16 @@ func main() {
 	// Parse flags
 	flag.Parse()
 
+	go hub.run()
+
 	// Set the handler to output the request
 	http.HandleFunc("/", handler)
+
+	// Create websocket listeners
+	http.HandleFunc("/ws/", func(w http.ResponseWriter, r *http.Request) {
+		sub := r.URL.Path[len("/ws/"):]
+		serveWs(hub, sub, w, r)
+	})
 
 	// Otuput that we're listening
 	fmt.Printf("\033[38;5;154mWebHook Debugger\033[0m by @mikemackintosh\n")
