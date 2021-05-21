@@ -46,18 +46,6 @@ window.onload = function () {
         }
     }
 
-    document.getElementById("form").onsubmit = function () {
-        if (!conn) {
-            return false;
-        }
-        if (!msg.value) {
-            return false;
-        }
-        conn.send(msg.value);
-        msg.value = "";
-        return false;
-    };
-
     console.log("Socket", "{{.ws}}");
     if (window["WebSocket"]) {
         conn = new WebSocket("{{.ws}}");

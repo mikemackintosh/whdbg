@@ -6,8 +6,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httputil"
+	"os"
 	"strings"
 )
 
@@ -58,7 +60,12 @@ func init() {
 
 // handler will write the request dump to the response and stdout
 func handler(w http.ResponseWriter, r *http.Request) {
-	if strings.Contains(r.Header.Get("Accept"), "text/html") && len(r.Header.Get("Sec-ch-ua")) > 0 {
+	fmt.Printf("r.URL.Host = %s\n", r.URL.Host)
+	fmt.Printf("r.Header.Get(Host) = %s\n", r.Header.Get("Host"))
+	fmt.Printf("r.Host = %s\n", r.Host)
+	fmt.Printf("r.URL.Hostname() = %s\n", r.URL.Hostname())
+
+	if r.Host == "whdbg.dev" {
 		if r.URL.Path == "/" {
 
 			home.Execute(w, map[string]interface{}{
@@ -70,7 +77,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "/_/") {
 			sub := r.URL.Path[len("/_/"):]
 			if len(sub) > 0 {
-				sock.Execute(w, map[string]string{"sub": sub, "ws": "ws://" + r.Host + "/ws/" + sub})
+				sock.Execute(w, map[string]string{"sub": sub, "ws": "wss://" + r.Host + "/ws/" + sub})
 				return
 			}
 		}
@@ -191,5 +198,11 @@ func main() {
 	fmt.Printf("%s\n\n", strings.Repeat("=", 24))
 
 	// Start the server
+	if len(os.Getenv("CERT")) > 0 && len(os.Getenv("KEY")) > 0 {
+		if httpErr := http.ListenAndServeTLS(":"+flagListPort, os.Getenv("CERT"), os.Getenv("KEY"), nil); httpErr != nil {
+			log.Fatal("The process exited with https error: ", httpErr.Error())
+		}
+	}
+
 	http.ListenAndServe(":"+flagListPort, nil)
 }
