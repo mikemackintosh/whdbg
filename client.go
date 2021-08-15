@@ -23,8 +23,9 @@ const (
 )
 
 var (
-	newline = []byte{'\n'}
-	space   = []byte{' '}
+	upgrader = websocket.Upgrader{}
+	newline  = []byte{'\n'}
+	space    = []byte{' '}
 )
 
 // Client is a middleman between the websocket connection and the hub.
@@ -41,6 +42,16 @@ type Client struct {
 
 	// Last touch time
 	lastAccess time.Time
+
+	// response is a response object to reply with
+	response Response
+}
+
+// response is an object used to reply to the webhook with.
+type Response struct {
+	StatusCode int    `json:"statusCode,omitempty"`
+	Body       string `json:"responseBody,omitempty"`
+	Reflect    bool   `json:"reflect,omitempty"`
 }
 
 // writePump pumps messages from the hub to the websocket connection.
@@ -58,6 +69,7 @@ func (c *Client) writePump() {
 	for {
 		select {
 		case message, ok := <-c.send:
+
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if !ok {
 				// The hub closed the channel.
@@ -97,7 +109,14 @@ func serveWs(hub *Hub, sub string, w http.ResponseWriter, r *http.Request) {
 		log.Println(err)
 		return
 	}
-	client := &Client{hub: hub, sub: sub, conn: conn, send: make(chan []byte, 4096), lastAccess: time.Now()}
+	client := &Client{
+		hub:        hub,
+		sub:        sub,
+		conn:       conn,
+		send:       make(chan []byte, maxMessageSize),
+		lastAccess: time.Now(),
+		response:   Response{StatusCode: http.StatusOK, Reflect: true},
+	}
 	client.hub.register <- client
 
 	hub.subs[sub] = client

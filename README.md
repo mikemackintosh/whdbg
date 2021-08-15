@@ -34,3 +34,27 @@ Response:
     Upgrade-Insecure-Requests: 1
     User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/53.0.2785.116 Safari/537.36
 
+
+## Nginx
+The following nginx configuration will allow you to use WSS correctly.
+
+```nginx
+server {
+  listen 443 ssl;
+  ssl_certificate /etc/ssl/certs/whdbg.crt;
+  ssl_certificate_key /etc/ssl/private/whdbg.key;
+
+  root /var/www/html;
+  index index.html;;
+  server_name _;
+
+  location / {
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_pass http://localhost:8080;
+  }
+}
+```

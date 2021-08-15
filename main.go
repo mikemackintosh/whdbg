@@ -2,20 +2,26 @@ package main
 
 import (
 	"crypto/hmac"
+	"embed"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
+	"io/ioutil"
 	"log"
+	"mime/multipart"
 	"net/http"
 	"net/http/httputil"
-	"os"
+	"net/url"
 	"strings"
+	"sync"
+	"time"
 )
 
 var (
-	// flagListPort is supplied to ListenAndServe.
-	flagListPort string
+	// flagListenPort is supplied to ListenAndServe.
+	flagListenPort string
 
 	// flagAuthtoken is used to perform authentication against whdbg.
 	flagAuthtoken string
@@ -29,6 +35,12 @@ var (
 	// flagStatusCode is used to set the response status code.
 	flagStatusCode int
 
+	//go:embed web/build
+	embeddedFiles embed.FS
+
+	// Version of binary
+	Version = "dev-20210803"
+
 	// Create the hub
 	hub = newHub()
 )
@@ -39,7 +51,7 @@ type Webhook map[string]interface{}
 func init() {
 	// Port to listen via HTTP on
 	// #-> default is 8080
-	flag.StringVar(&flagListPort, "p", "8080", "Default listener port")
+	flag.StringVar(&flagListenPort, "p", "8080", "Default listener port")
 
 	// Output Format
 	// #-> default is empty
@@ -58,29 +70,81 @@ func init() {
 	flag.IntVar(&flagStatusCode, "c", 200, "Response code set for requests")
 }
 
+// DebugRequest
+type DebugPayload struct {
+	Listener  string        `json:"listener"`
+	Dump      string        `json:"dump"`
+	URL       string        `json:"url"`
+	UnixTime  int64         `json:"unixtimestamp"`
+	Timestamp string        `json:"timestamp"`
+	Request   *DebugRequest `json:"request"`
+}
+
+type DebugRequest struct {
+	Host    string
+	Method  string
+	URL     *url.URL
+	Header  http.Header
+	Cookies []*http.Cookie
+
+	Proto      string // "HTTP/1.0"
+	ProtoMajor int    // 1
+	ProtoMinor int    // 0
+
+	ContentLength    int64
+	PostForm         url.Values
+	Form             url.Values
+	MultipartForm    *multipart.Form
+	TransferEncoding []string
+
+	RemoteAddr string
+	RequestURI string
+
+	RequestURL string `json:"req_url"`
+
+	Body string
+}
+
+func ReqToDbg(r *http.Request) *DebugRequest {
+	var dbg DebugRequest = DebugRequest{
+		Host:    r.Host,
+		Method:  r.Method,
+		URL:     r.URL,
+		Header:  r.Header,
+		Cookies: r.Cookies(),
+
+		Proto:      r.Proto,
+		ProtoMajor: r.ProtoMajor,
+		ProtoMinor: r.ProtoMinor,
+
+		ContentLength:    r.ContentLength,
+		PostForm:         r.PostForm,
+		Form:             r.Form,
+		MultipartForm:    r.MultipartForm,
+		TransferEncoding: r.TransferEncoding,
+
+		RemoteAddr: r.RemoteAddr,
+		RequestURI: r.RequestURI,
+	}
+
+	raw, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		dbg.Body = err.Error()
+	} else {
+		dbg.Body = string(raw)
+	}
+	defer r.Body.Close()
+
+	return &dbg
+}
+
 // handler will write the request dump to the response and stdout
 func handler(w http.ResponseWriter, r *http.Request) {
-	fmt.Printf("r.URL.Host = %s\n", r.URL.Host)
-	fmt.Printf("r.Header.Get(Host) = %s\n", r.Header.Get("Host"))
-	fmt.Printf("r.Host = %s\n", r.Host)
-	fmt.Printf("r.URL.Hostname() = %s\n", r.URL.Hostname())
+	listener := strings.Replace(r.Host, ".whdbg.dev", "", -1)
 
-	if r.Host == "whdbg.dev" {
-		if r.URL.Path == "/" {
-
-			home.Execute(w, map[string]interface{}{
-				"subs": hub.subs,
-			})
-			return
-		}
-
-		if strings.Contains(r.URL.Path, "/_/") {
-			sub := r.URL.Path[len("/_/"):]
-			if len(sub) > 0 {
-				sock.Execute(w, map[string]string{"sub": sub, "ws": "wss://" + r.Host + "/ws/" + sub})
-				return
-			}
-		}
+	if _, ok := hub.subs[listener]; !ok {
+		w.Write([]byte("Please create the listener first by visiting https://whdbg.dev/_/" + listener + "\n"))
+		return
 	}
 
 	if len(flagAuthtoken) > 0 {
@@ -100,9 +164,6 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Output message
-	fmt.Printf("\n\033[38;5;45mNew Request Received:\033[0m\n")
-
 	// Gen the request output
 	var requestDump []byte
 	requestDump, err := httputil.DumpRequest(r, true)
@@ -110,16 +171,21 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		requestDump = []byte(err.Error())
 	}
 
-	listener := strings.Replace(r.Host, ".whdbg.dev", "", -1)
-	if ws, ok := hub.subs[listener]; ok {
-		ws.hub.broadcast <- requestDump
-	} else {
-		w.Write([]byte("Please create the listener first by visiting https://whdbg.dev/_/" + listener + "\n"))
-		return
+	wh := DebugPayload{
+		Listener:  listener,
+		Request:   ReqToDbg(r),
+		Timestamp: time.Now().Format(time.RFC1123),
+		UnixTime:  time.Now().Unix(),
 	}
+	wh.URL = wh.Request.URL.String()
 
-	// listener := strings.Replace(r.Host, ".whdbg.dev", "", -1)
-	// push(w, r, listener, requestDump)
+	wh.Dump = string(requestDump)
+
+	b, err := json.Marshal(wh)
+	if err != nil {
+		requestDump = []byte(err.Error())
+	}
+	hub.subs[listener].hub.broadcast <- b
 
 	// Check the content type header
 	switch r.Header.Get("Content-type") {
@@ -134,16 +200,57 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		fmt.Printf(string(requestDump))
 	}
 
-	// if response body is set, print it first.
-	if len(flagResponseBody) > 0 {
-		w.WriteHeader(flagStatusCode)
-		w.Write([]byte(flagResponseBody))
+	// Output to response
+	w.WriteHeader(hub.subs[listener].response.StatusCode)
+
+	if !hub.subs[listener].response.Reflect {
+		w.Write([]byte(hub.subs[listener].response.Body))
 		return
 	}
 
-	// Output to response
-	w.WriteHeader(flagStatusCode)
 	w.Write(requestDump)
+}
+
+func apiHandler(w http.ResponseWriter, r *http.Request) {
+	p := strings.Split(r.URL.Path, "/")
+	if len(p) > 0 {
+		if p[len(p)-1] == "update" {
+			if err := updateResponse(p[len(p)-2], r); err != nil {
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte("{\"status\":\"error\"}"))
+			}
+
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("{\"status\":\"ok\"}"))
+			return
+		}
+	}
+}
+
+func updateResponse(listener string, r *http.Request) error {
+	body, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		return err
+	}
+	defer r.Body.Close()
+
+	fmt.Println(string(body))
+	if len(body) > 2 {
+		var resp Response
+		if err := json.Unmarshal(body, &resp); err != nil {
+			log.Fatalf("-> UPD ERR: %s\n", err)
+		}
+
+		if len(resp.Body) == 0 {
+			resp.Reflect = true
+		} else {
+			resp.Reflect = false
+		}
+
+		hub.subs[listener].response = resp
+	}
+
+	return nil
 }
 
 func decodeJSON(w http.ResponseWriter, body io.Reader) {
@@ -177,32 +284,80 @@ func decodeJSON(w http.ResponseWriter, body io.Reader) {
 	}
 }
 
+func getFileSystem() http.FileSystem {
+	// Get the build subdirectory as the
+	// root directory so that it can be passed
+	// to the http.FileServer
+	fsys, err := fs.Sub(embeddedFiles, "web/build")
+	if err != nil {
+		panic(err)
+	}
+
+	return http.FS(fsys)
+}
+
+/*
+request -> handler
+		-> /ws/ --> WebSocket handler
+		-> / --> serve page
+		-> /_/fsdfsd -> serve page
+*/
+
+// hostDetectorMiddleware
+func hostDetectorMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+		if !strings.Contains(r.Host, ".whdbg.dev") {
+			http.FileServer(getFileSystem()).ServeHTTP(w, r)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
 func main() {
 	// Parse flags
 	flag.Parse()
 
-	go hub.run()
-
 	// Set the handler to output the request
-	http.HandleFunc("/", handler)
+	r := http.NewServeMux()
 
 	// Create websocket listeners
-	http.HandleFunc("/ws/", func(w http.ResponseWriter, r *http.Request) {
+	r.HandleFunc("/ws/", func(w http.ResponseWriter, r *http.Request) {
 		sub := r.URL.Path[len("/ws/"):]
+		fmt.Printf("=> Starting WS listener: %s\n", sub)
 		serveWs(hub, sub, w, r)
 	})
 
+	r.HandleFunc("/api/", apiHandler)
+
+	r.HandleFunc("/_/", func(w http.ResponseWriter, r *http.Request) {
+		d, _ := embeddedFiles.ReadFile("web/build/index.html")
+		w.WriteHeader(http.StatusOK)
+		w.Write(d)
+	})
+
+	r.Handle("/", hostDetectorMiddleware(http.HandlerFunc(handler)))
+
 	// Otuput that we're listening
 	fmt.Printf("\033[38;5;154mWebHook Debugger\033[0m by @mikemackintosh\n")
-	fmt.Printf("Listening on port: %s\n", flagListPort)
 	fmt.Printf("%s\n\n", strings.Repeat("=", 24))
 
-	// Start the server
-	if len(os.Getenv("CERT")) > 0 && len(os.Getenv("KEY")) > 0 {
-		if httpErr := http.ListenAndServeTLS(":"+flagListPort, os.Getenv("CERT"), os.Getenv("KEY"), nil); httpErr != nil {
-			log.Fatal("The process exited with https error: ", httpErr.Error())
-		}
-	}
+	var wg sync.WaitGroup
+	fmt.Printf("Starting Websocket Server...\n")
+	go func(wg *sync.WaitGroup) {
+		hub.run()
+		defer wg.Done()
+	}(&wg)
+	wg.Add(1)
 
-	http.ListenAndServe(":"+flagListPort, nil)
+	fmt.Printf("Listening HTTP on port %s...\n", flagListenPort)
+	go func(wg *sync.WaitGroup) {
+		log.Fatal(http.ListenAndServe(":"+flagListenPort, r))
+		defer wg.Done()
+	}(&wg)
+	wg.Add(1)
+
+	wg.Wait()
 }
